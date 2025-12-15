@@ -28,6 +28,7 @@ async function run() {
     await client.connect();
     const db = client.db("asset_verse_db");
     const userCollection = db.collection("users");
+    const assetCollection = db.collection("assets");
 
     // get user data
     app.get("/users", async (req, res) => {
@@ -49,6 +50,7 @@ async function run() {
     app.post("/users", async (req, res) => {
       const user = req.body;
       user.createdAt = new Date();
+      user.updatedAt = new Date();
 
       const query = { email: user.email };
       const existingUser = await userCollection.findOne(query);
@@ -58,6 +60,21 @@ async function run() {
       }
 
       const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+
+    // add asset data
+    app.post("/assets", async (req, res) => {
+      const asset = req.body;
+
+      const email = req.body.addedBy;
+      const user = await userCollection.findOne({ email });
+
+      asset.companyName = user?.companyName || "Unknown";
+      asset.createdAt = new Date();
+      asset.updatedAt = new Date();
+
+      const result = await assetCollection.insertOne(asset);
       res.send(result);
     });
 
