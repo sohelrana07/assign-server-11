@@ -21,7 +21,6 @@ const verifyJwtToken = async (req, res, next) => {
     if (err) {
       return res.status(401).send({ message: "unauthorized access" });
     }
-    // console.log("after decoded", decoded);
     req.decoded_email = decoded.email;
     next();
   });
@@ -47,6 +46,7 @@ async function run() {
     const db = client.db("asset_verse_db");
     const userCollection = db.collection("users");
     const assetCollection = db.collection("assets");
+    const requestCollection = db.collection("requests");
 
     // jwt related apis
     app.post("/getToken", async (req, res) => {
@@ -101,6 +101,13 @@ async function run() {
       res.send(result);
     });
 
+    // get asset data
+    app.get("/assets", verifyJwtToken, async (req, res) => {
+      const cursor = assetCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
     // add asset data
     app.post("/assets", async (req, res) => {
       const asset = req.body;
@@ -113,6 +120,32 @@ async function run() {
       asset.updatedAt = new Date();
 
       const result = await assetCollection.insertOne(asset);
+      res.send(result);
+    });
+
+    // add asset request
+    app.post("/requests", verifyJwtToken, async (req, res) => {
+      const assetRequest = req.body;
+      const requesterEmail = req.decoded_email;
+
+      const employee = await userCollection.findOne({
+        email: requesterEmail,
+      });
+
+      console.log("after decoded", employee);
+
+      if (!employee) {
+        return res.send({ message: "Employee not found" });
+      }
+
+      assetRequest.requesterName = employee.name;
+      assetRequest.requesterEmail = requesterEmail;
+      assetRequest.requestDate = new Date();
+      assetRequest.approvalDate = null;
+      assetRequest.requestStatus = "pending";
+      assetRequest.processedBy = null;
+
+      const result = await requestCollection.insertOne(assetRequest);
       res.send(result);
     });
 
