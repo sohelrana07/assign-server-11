@@ -3,11 +3,29 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion } = require("mongodb");
 const app = express();
 require("dotenv").config();
+var jwt = require("jsonwebtoken");
 const port = process.env.PORT || 3000;
 
 // middleware
 app.use(cors());
 app.use(express.json());
+
+const verifyJwtToken = async (req, res, next) => {
+  const authorization = req.headers.authorization;
+  if (!authorization) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  const token = authorization.split(" ")[1];
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "unauthorized access" });
+    }
+    // console.log("after decoded", decoded);
+    req.decoded_email = decoded.email;
+    next();
+  });
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@fast-cluster.usibdwl.mongodb.net/?appName=Fast-Cluster`;
 
@@ -29,6 +47,26 @@ async function run() {
     const db = client.db("asset_verse_db");
     const userCollection = db.collection("users");
     const assetCollection = db.collection("assets");
+
+    // jwt related apis
+    app.post("/getToken", async (req, res) => {
+      const loggedUser = req.body;
+      const token = jwt.sign(loggedUser, process.env.JWT_SECRET, {
+        expiresIn: "1h",
+      });
+      res.send({ token: token });
+    });
+
+    // Verify Hr
+    const verifyHR = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await userCollection.findOne({ email });
+
+      if (user?.role !== "hr") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
 
     // get user data
     app.get("/users", async (req, res) => {
