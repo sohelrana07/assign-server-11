@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 require("dotenv").config();
 var jwt = require("jsonwebtoken");
@@ -108,18 +108,29 @@ async function run() {
       res.send(result);
     });
 
-    // add asset data
-    app.post("/assets", async (req, res) => {
+    // add asset data (Only admin)
+    app.post("/assets", verifyJwtToken, verifyHR, async (req, res) => {
       const asset = req.body;
 
-      const email = req.body.addedBy;
+      const email = req.body.hrEmail;
       const user = await userCollection.findOne({ email });
 
+      asset.productQuantity = Number(asset.productQuantity);
+      asset.availableQuantity = Number(asset.availableQuantity);
       asset.companyName = user?.companyName || "Unknown";
       asset.createdAt = new Date();
       asset.updatedAt = new Date();
 
       const result = await assetCollection.insertOne(asset);
+      res.send(result);
+    });
+
+    // get asset request (Only admin)
+    app.get("/requests", verifyJwtToken, verifyHR, async (req, res) => {
+      const hrEmail = req.decoded_email;
+
+      const cursor = requestCollection.find({ hrEmail: hrEmail });
+      const result = await cursor.toArray();
       res.send(result);
     });
 
@@ -131,8 +142,6 @@ async function run() {
       const employee = await userCollection.findOne({
         email: requesterEmail,
       });
-
-      console.log("after decoded", employee);
 
       if (!employee) {
         return res.send({ message: "Employee not found" });
@@ -148,6 +157,89 @@ async function run() {
       const result = await requestCollection.insertOne(assetRequest);
       res.send(result);
     });
+
+    // Approve request
+    app.patch(
+      "/requests/approve/:id",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const requestId = req.params.id;
+
+        const query = { _id: new ObjectId(requestId) };
+        const request = await requestCollection.findOne(query);
+
+        const filter = { email: request.requesterEmail };
+        const employee = await userCollection.findOne(filter);
+
+        const asset = await assetCollection.findOne({
+          _id: new ObjectId(request.assetId),
+        });
+
+        // Request collection
+        await requestCollection.updateOne(query, {
+          $set: {
+            requestStatus: "approved",
+            approvalDate: new Date(),
+            processedBy: req.decoded_email,
+          },
+        });
+
+        // Assets collection
+        await assetCollection.updateOne(
+          { _id: new ObjectId(request.assetId) },
+          { $inc: { availableQuantity: -1 } }
+        );
+
+        // Users collection
+        const newAsset = {
+          assetId: asset._id,
+          assetName: asset.productName,
+          assetType: asset.productType,
+          companyName: asset.companyName,
+          hrEmail: asset.hrEmail,
+          assignedAt: new Date(),
+        };
+
+        if (employee.assets) {
+          await userCollection.updateOne(
+            { email: employee.email },
+            { $push: { assets: newAsset } }
+          );
+        } else {
+          await userCollection.updateOne(
+            { email: employee.email },
+            { $set: { assets: [newAsset] } }
+          );
+        }
+
+        res.send({
+          message: "Request approved successfully",
+          modifiedCount: 1,
+        });
+      }
+    );
+
+    // Reject request
+    app.patch(
+      "/requests/reject/:id",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const requestId = req.params.id;
+
+        const query = { _id: new ObjectId(requestId) };
+        const result = await requestCollection.updateOne(query, {
+          $set: {
+            requestStatus: "rejected",
+            approvalDate: new Date(),
+            processedBy: req.decoded_email,
+          },
+        });
+
+        res.send(result);
+      }
+    );
 
     await client.db("admin").command({ ping: 1 });
     console.log(
