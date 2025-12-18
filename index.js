@@ -68,10 +68,55 @@ async function run() {
       next();
     };
 
+    // Verify Employee
+    const verifyEmployee = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await userCollection.findOne({ email });
+
+      if (user?.role !== "employee") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
     // get user data
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyJwtToken, async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    // get specific user data (profile)
+    app.get("/users/me", verifyJwtToken, async (req, res) => {
+      const email = req.decoded_email;
+
+      const user = await userCollection.findOne(
+        { email },
+        {
+          projection: {
+            name: 1,
+            email: 1,
+            dateOfBirth: 1,
+            role: 1,
+            companyName: 1,
+            profileImage: 1,
+          },
+        }
+      );
+      res.send(user);
+    });
+
+    // update specific user data (profile)
+    app.patch("/users/me", verifyJwtToken, async (req, res) => {
+      const email = req.decoded_email;
+      const updatedData = req.body;
+      updatedData.updatedAt = new Date();
+
+      const result = await userCollection.updateOne(
+        { email },
+        { $set: updatedData }
+      );
+
       res.send(result);
     });
 
@@ -102,7 +147,7 @@ async function run() {
     });
 
     // get asset data
-    app.get("/assets", verifyJwtToken, async (req, res) => {
+    app.get("/assets", verifyJwtToken, verifyEmployee, async (req, res) => {
       const cursor = assetCollection.find();
       const result = await cursor.toArray();
       res.send(result);
@@ -135,7 +180,7 @@ async function run() {
     });
 
     // add asset request
-    app.post("/requests", verifyJwtToken, async (req, res) => {
+    app.post("/requests", verifyJwtToken, verifyEmployee, async (req, res) => {
       const assetRequest = req.body;
       const requesterEmail = req.decoded_email;
 
@@ -195,10 +240,14 @@ async function run() {
         const newAsset = {
           assetId: asset._id,
           assetName: asset.productName,
+          assetImage: asset.productImage,
           assetType: asset.productType,
           companyName: asset.companyName,
           hrEmail: asset.hrEmail,
+          requestDate: request.requestDate,
+          approvalDate: new Date(),
           assignedAt: new Date(),
+          status: "assigned",
         };
 
         if (employee.assets) {
@@ -240,6 +289,18 @@ async function run() {
         res.send(result);
       }
     );
+
+    // get employee own asset
+    app.get("/my-assets", verifyJwtToken, verifyEmployee, async (req, res) => {
+      const email = req.decoded_email;
+      const employee = await userCollection.findOne(
+        { email },
+        {
+          projection: { assets: 1, _id: 0 },
+        }
+      );
+      res.send(employee?.assets || []);
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log(
