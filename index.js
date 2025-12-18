@@ -47,6 +47,7 @@ async function run() {
     const userCollection = db.collection("users");
     const assetCollection = db.collection("assets");
     const requestCollection = db.collection("requests");
+    const employeeAffiliationCollection = db.collection("employeeAffiliations");
 
     // jwt related apis
     app.post("/getToken", async (req, res) => {
@@ -99,6 +100,8 @@ async function run() {
             dateOfBirth: 1,
             role: 1,
             companyName: 1,
+            packageLimit: 1,
+            currentEmployees: 1,
             profileImage: 1,
           },
         }
@@ -163,6 +166,7 @@ async function run() {
       asset.productQuantity = Number(asset.productQuantity);
       asset.availableQuantity = Number(asset.availableQuantity);
       asset.companyName = user?.companyName || "Unknown";
+      asset.companyLogo = user?.companyLogo || "";
       asset.createdAt = new Date();
       asset.updatedAt = new Date();
 
@@ -259,6 +263,31 @@ async function run() {
           await userCollection.updateOne(
             { email: employee.email },
             { $set: { assets: [newAsset] } }
+          );
+        }
+
+        // employeeAffiliations
+        const existingAffiliation = await employeeAffiliationCollection.findOne(
+          {
+            employeeEmail: employee.email,
+            companyName: asset.companyName,
+          }
+        );
+
+        if (!existingAffiliation) {
+          await employeeAffiliationCollection.insertOne({
+            employeeEmail: employee.email,
+            employeeName: employee.name,
+            hrEmail: asset.hrEmail,
+            companyName: asset.companyName,
+            companyLogo: asset.companyLogo,
+            affiliationDate: new Date(),
+            status: "active",
+          });
+
+          await userCollection.updateOne(
+            { email: asset.hrEmail },
+            { $inc: { currentEmployees: 1 } }
           );
         }
 
