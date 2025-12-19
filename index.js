@@ -331,6 +331,91 @@ async function run() {
       res.send(employee?.assets || []);
     });
 
+    // My Employee List (HR)
+    app.get("/my-employees", verifyJwtToken, verifyHR, async (req, res) => {
+      const hrEmail = req.decoded_email;
+
+      const affiliations = await employeeAffiliationCollection
+        .find({
+          hrEmail: hrEmail,
+          status: "active",
+        })
+        .toArray();
+
+      // employee details add
+      const employees = [];
+
+      for (const item of affiliations) {
+        const employee = await userCollection.findOne(
+          { email: item.employeeEmail },
+          {
+            projection: {
+              name: 1,
+              email: 1,
+              profileImage: 1,
+              assets: 1,
+            },
+          }
+        );
+
+        employees.push({
+          employeeName: item.employeeName,
+          employeeEmail: item.employeeEmail,
+          profileImage: employee?.profileImage,
+          joinDate: item.affiliationDate,
+          assetsCount: employee?.assets?.length || 0,
+          companyName: item.companyName,
+          companyLogo: item.companyLogo,
+        });
+      }
+
+      res.send(employees);
+    });
+
+    // Remove employee from Employee List (HR)
+    app.patch(
+      "/my-employees/remove/:email",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const employeeEmail = req.params.email;
+        const hrEmail = req.decoded_email;
+
+        /* find affiliation */
+        const affiliation = await employeeAffiliationCollection.findOne({
+          employeeEmail: employeeEmail,
+          hrEmail: hrEmail,
+          status: "active",
+        });
+
+        if (!affiliation) {
+          return res.send({ message: "Employee not found in your team" });
+        }
+
+        /* update affiliation */
+        const result = await employeeAffiliationCollection.updateOne(
+          { _id: affiliation._id },
+          {
+            $set: {
+              status: "inactive",
+              removedAt: new Date(),
+            },
+          }
+        );
+
+        /* decrease HR employee count */
+        await userCollection.updateOne(
+          { email: hrEmail },
+          { $inc: { currentEmployees: -1 } }
+        );
+
+        res.send({
+          modifiedCount: result.modifiedCount,
+          message: "Employee removed successfully",
+        });
+      }
+    );
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
