@@ -35,3 +35,17 @@ This repository contains the **server-side code** of AssetVerse, a web-based cor
 
 ```bash
 git clone https://github.com/sohelrana07/assign-server-11
+
+```
+
+## Environment variables configuration
+
+```
+
+DB_USER=aaa-*******
+DB_PASS=aaWL******
+JWT_SECRET=55551b4634722fb03420f5068*******
+STRIPE_SECRET=sk_9999_51SYlL0CFRHfnSf**********
+SITE_DOMAIN=http://localhost:5173
+
+```
