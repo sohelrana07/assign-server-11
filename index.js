@@ -4,6 +4,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 require("dotenv").config();
 var jwt = require("jsonwebtoken");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const port = process.env.PORT || 3000;
 
 // middleware
@@ -49,6 +50,7 @@ async function run() {
     const requestCollection = db.collection("requests");
     const employeeAffiliationCollection = db.collection("employeeAffiliations");
     const packageCollection = db.collection("packages");
+    const paymentCollection = db.collection("payments");
 
     // jwt related apis
     app.post("/getToken", async (req, res) => {
@@ -590,10 +592,169 @@ async function run() {
       res.send(result);
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+    // Payment related apis (HR)
+    app.post(
+      "/create-payment-session",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const { packageId, packageName, amount } = req.body;
+        const amountNumber = parseInt(amount) * 100;
+        const userEmail = req.decoded_email;
+
+        const session = await stripe.checkout.sessions.create({
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                unit_amount: amountNumber,
+                product_data: { name: packageName },
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          metadata: {
+            packageId,
+            packageName,
+            userEmail,
+          },
+          customer_email: userEmail,
+          success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+        });
+
+        res.send({ url: session.url });
+      }
     );
+
+    // Payment success (HR)
+    app.patch(
+      "/payment-success",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const sessionId = req.query.session_id;
+        console.log("text 1", sessionId);
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        const transactionId = session.payment_intent;
+        const query = { transactionId: transactionId };
+        const existingPayment = await paymentCollection.findOne(query);
+
+        console.log("text 2", existingPayment);
+
+        if (existingPayment) {
+          return res.send({ message: "Payment already exists", transactionId });
+        }
+
+        const { packageId, packageName, userEmail } = session.metadata;
+
+        if (session.payment_status === "paid") {
+          const packageInfo = await packageCollection.findOne({
+            _id: new ObjectId(packageId),
+          });
+
+          const payment = {
+            packageId,
+            userEmail,
+            packageName,
+            amount: session.amount_total / 100,
+            currency: session.currency,
+            transactionId: session.payment_intent,
+            paymentStatus: "paid",
+            paidAt: new Date(),
+          };
+
+          await paymentCollection.insertOne(payment);
+
+          // update user info
+          await userCollection.updateOne(
+            { email: userEmail },
+            {
+              $set: {
+                subscription: packageName,
+                packageLimit: packageInfo.employeeLimit,
+              },
+            }
+          );
+
+          return res.send({ success: true, payment });
+        }
+
+        return res.send({ success: false, message: "Payment not completed" });
+      }
+    );
+
+    // payment history (HR)
+    app.get("/payments/history", verifyJwtToken, verifyHR, async (req, res) => {
+      const userEmail = req.decoded_email;
+
+      const payments = await paymentCollection
+        .find({ userEmail })
+        .sort({ paidAt: -1 })
+        .toArray();
+
+      res.send(payments);
+    });
+
+    // Analytics (HR)
+    app.get(
+      "/dashboard/analytics",
+      verifyJwtToken,
+      verifyHR,
+      async (req, res) => {
+        const hrEmail = req.decoded_email;
+
+        // Returnable vs Non-returnable
+        const assets = await assetCollection.find({ hrEmail }).toArray();
+        const returnableCount = assets.filter(
+          (a) => a.productType === "Returnable"
+        ).length;
+        const nonReturnableCount = assets.filter(
+          (a) => a.productType === "Non-returnable"
+        ).length;
+
+        const pieData = [
+          { name: "Returnable", value: returnableCount },
+          { name: "Non-returnable", value: nonReturnableCount },
+        ];
+
+        // most requested assets
+        const pipeline = [
+          { $match: { hrEmail } },
+          { $group: { _id: "$assetId", requestCount: { $sum: 1 } } },
+          { $sort: { requestCount: -1 } },
+          { $limit: 5 },
+        ];
+
+        const topRequests = await requestCollection
+          .aggregate(pipeline)
+          .toArray();
+
+        //  bar chart data
+        const barData = [];
+
+        for (const request of topRequests) {
+          const asset = await assetCollection.findOne({
+            _id: new ObjectId(request._id),
+          });
+
+          barData.push({
+            name: asset?.productName || "Unknown",
+            requests: request.requestCount,
+          });
+        }
+
+        res.send({ pieData, barData });
+      }
+    );
+
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // await client.close();
   }
