@@ -48,6 +48,7 @@ async function run() {
     const assetCollection = db.collection("assets");
     const requestCollection = db.collection("requests");
     const employeeAffiliationCollection = db.collection("employeeAffiliations");
+    const packageCollection = db.collection("packages");
 
     // jwt related apis
     app.post("/getToken", async (req, res) => {
@@ -64,7 +65,7 @@ async function run() {
       const user = await userCollection.findOne({ email });
 
       if (user?.role !== "hr") {
-        return res.status(403).send({ message: "forbidden access" });
+        return res.status(403).send({ message: "forbidden access hr" });
       }
       next();
     };
@@ -75,7 +76,7 @@ async function run() {
       const user = await userCollection.findOne({ email });
 
       if (user?.role !== "employee") {
-        return res.status(403).send({ message: "forbidden access" });
+        return res.status(403).send({ message: "forbidden access employee" });
       }
       next();
     };
@@ -103,6 +104,7 @@ async function run() {
             packageLimit: 1,
             currentEmployees: 1,
             profileImage: 1,
+            subscription: 1,
           },
         }
       );
@@ -149,11 +151,33 @@ async function run() {
       res.send(result);
     });
 
-    // get asset data
+    // get asset data (Employee)
     app.get("/assets", verifyJwtToken, verifyEmployee, async (req, res) => {
       const cursor = assetCollection.find();
       const result = await cursor.toArray();
       res.send(result);
+    });
+
+    // get asset data (HR)
+    app.get("/hr/assets", verifyJwtToken, verifyHR, async (req, res) => {
+      const hrEmail = req.decoded_email;
+      const search = req.query.search || "";
+      const page = Number(req.query.page) || 1;
+      const limit = Number(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
+
+      const query = {
+        hrEmail,
+        productName: { $regex: search, $options: "i" },
+      };
+
+      const cursor = assetCollection
+        .find(query)
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 });
+      const assets = await cursor.toArray();
+      res.send(assets);
     });
 
     // add asset data (Only admin)
@@ -171,6 +195,72 @@ async function run() {
       asset.updatedAt = new Date();
 
       const result = await assetCollection.insertOne(asset);
+      res.send(result);
+    });
+
+    // update asset data (HR)
+    app.patch("/assets/:id", verifyJwtToken, verifyHR, async (req, res) => {
+      const id = req.params.id;
+      const body = req.body;
+
+      // find old data
+      const asset = await assetCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+      if (!asset) {
+        return res.status(404).send({ message: "Asset not found" });
+      }
+
+      const updatedAsset = {};
+
+      if (body.productName) {
+        updatedAsset.productName = body.productName;
+      }
+
+      if (body.productImage) {
+        updatedAsset.productImage = body.productImage;
+      }
+
+      if (body.productType) {
+        updatedAsset.productType = body.productType;
+      }
+
+      //  Quantity related
+      if (body.productQuantity !== undefined && body.productQuantity !== "") {
+        const newQuantity = Number(body.productQuantity);
+        const oldQuantity = asset.productQuantity;
+        const oldAvailable = asset.availableQuantity;
+
+        const difference = newQuantity - oldQuantity;
+
+        updatedAsset.productQuantity = newQuantity;
+
+        if (difference > 0) {
+          updatedAsset.availableQuantity = oldAvailable + difference;
+        } else {
+          updatedAsset.availableQuantity = Math.min(oldAvailable, newQuantity);
+        }
+      }
+
+      updatedAsset.updatedAt = new Date();
+
+      const result = await assetCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedAsset }
+      );
+
+      res.send(result);
+    });
+
+    // delete asset (HR)
+    app.delete("/assets/:id", verifyJwtToken, verifyHR, async (req, res) => {
+      const id = req.params.id;
+
+      const result = await assetCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+
       res.send(result);
     });
 
@@ -415,6 +505,90 @@ async function run() {
         });
       }
     );
+
+    // My Team - get companies (Employee)
+    app.get(
+      "/my-team/companies",
+      verifyJwtToken,
+      verifyEmployee,
+      async (req, res) => {
+        const email = req.decoded_email;
+
+        const affiliations = await employeeAffiliationCollection
+          .find({
+            employeeEmail: email,
+            status: "active",
+          })
+          .toArray();
+
+        const companies = affiliations.map((item) => ({
+          companyName: item.companyName,
+          companyLogo: item.companyLogo,
+        }));
+
+        res.send(companies);
+      }
+    );
+
+    // My Team - get data (Employee)
+    app.get("/my-team", verifyJwtToken, verifyEmployee, async (req, res) => {
+      const companyName = req.query.company;
+
+      const affiliations = await employeeAffiliationCollection
+        .find({
+          companyName: companyName,
+          status: "active",
+        })
+        .toArray();
+
+      /* get user email */
+      const emails = affiliations.map((a) => a.employeeEmail);
+
+      const users = await userCollection
+        .find(
+          { email: { $in: emails } },
+          {
+            projection: {
+              name: 1,
+              email: 1,
+              dateOfBirth: 1,
+              profileImage: 1,
+              role: 1,
+            },
+          }
+        )
+        .toArray();
+
+      /* team list */
+      const team = users.map((user) => ({
+        name: user?.name,
+        email: user?.email,
+        photo: user?.profileImage,
+        position: user?.role,
+        dateOfBirth: user?.dateOfBirth,
+      }));
+
+      /* upcoming birthdays */
+      const currentMonth = new Date().getMonth() + 1;
+
+      const upcomingBirthdays = team.filter((member) => {
+        if (!member.dateOfBirth) return false;
+        const birthMonth = new Date(member.dateOfBirth).getMonth() + 1;
+        return birthMonth === currentMonth;
+      });
+
+      res.send({
+        team,
+        upcomingBirthdays,
+      });
+    });
+
+    // get all packages (public)
+    app.get("/packages", async (req, res) => {
+      const cursor = packageCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log(
