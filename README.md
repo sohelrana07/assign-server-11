@@ -38,7 +38,7 @@ git clone https://github.com/sohelrana07/assign-server-11
 
 ```
 
-## Environment variables configuration
+## 🔒 Environment variables configuration
 
 ```
 
